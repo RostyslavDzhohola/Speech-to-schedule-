@@ -196,9 +196,12 @@ export default function VoiceTestPage() {
         model: "gpt-realtime-mini-2025-10-06",
       });
 
-      // Listen for connection events
+      // Listen for connection events - these are the primary way to detect connection state
       (session.on as any)("connected", () => {
-        setStatus("connected");
+        setStatus((currentStatus) => {
+          // Only update to connected if we're still connecting (don't overwrite error state)
+          return currentStatus === "connecting" ? "connected" : currentStatus;
+        });
       });
 
       (session.on as any)("error", (err: any) => {
@@ -234,6 +237,11 @@ export default function VoiceTestPage() {
         apiKey: ephemeralToken,
       });
 
+      // Fallback: if connect() resolved and we're still connecting, assume connected
+      // But only update if status hasn't been changed by event listeners (e.g., to error)
+      setStatus((currentStatus) => {
+        return currentStatus === "connecting" ? "connected" : currentStatus;
+      });
       sessionRef.current = session;
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to connect");
@@ -241,14 +249,21 @@ export default function VoiceTestPage() {
     }
   };
 
-  const disconnect = () => {
+  const disconnect = async () => {
     if (sessionRef.current) {
-      // Try to disconnect the session
+      // Try to disconnect the session using the proper API
       try {
-        // RealtimeSession may use different method - check transport layer
-        const transport = (sessionRef.current as any).transport;
-        if (transport && typeof transport.disconnect === "function") {
-          transport.disconnect();
+        // Try direct disconnect method first
+        if (typeof (sessionRef.current as any).disconnect === "function") {
+          await (sessionRef.current as any).disconnect();
+        } else if (typeof (sessionRef.current as any).close === "function") {
+          await (sessionRef.current as any).close();
+        } else {
+          // Fallback to transport layer
+          const transport = (sessionRef.current as any).transport;
+          if (transport && typeof transport.disconnect === "function") {
+            await transport.disconnect();
+          }
         }
       } catch (e) {
         console.warn("Error disconnecting session:", e);
@@ -276,11 +291,19 @@ export default function VoiceTestPage() {
   useEffect(() => {
     return () => {
       if (sessionRef.current) {
-        // Try to disconnect the session
+        // Try to disconnect the session using the proper API
         try {
-          const transport = (sessionRef.current as any).transport;
-          if (transport && typeof transport.disconnect === "function") {
-            transport.disconnect();
+          // Try direct disconnect method first
+          if (typeof (sessionRef.current as any).disconnect === "function") {
+            (sessionRef.current as any).disconnect().catch(() => {});
+          } else if (typeof (sessionRef.current as any).close === "function") {
+            (sessionRef.current as any).close().catch(() => {});
+          } else {
+            // Fallback to transport layer
+            const transport = (sessionRef.current as any).transport;
+            if (transport && typeof transport.disconnect === "function") {
+              transport.disconnect().catch(() => {});
+            }
           }
         } catch (e) {
           console.warn("Error disconnecting session:", e);
@@ -361,9 +384,9 @@ export default function VoiceTestPage() {
                 ) : (
                   <button
                     onClick={disconnect}
-                    className="px-6 py-3 bg-red-600 text-white rounded-lg hover:bg-red-700"
+                    className="px-6 py-3 bg-red-600 text-white rounded-lg hover:bg-red-700 font-semibold"
                   >
-                    Disconnect
+                    Stop Voice Session
                   </button>
                 )}
 
