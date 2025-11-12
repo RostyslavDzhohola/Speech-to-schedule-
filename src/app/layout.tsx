@@ -2,6 +2,7 @@ import { ClerkProvider } from "@clerk/nextjs";
 import type { Metadata } from "next";
 import "./globals.css";
 import ConvexClientProvider from "@/components/ConvexClientProvider";
+import { Header } from "@/components/Header";
 
 export const metadata: Metadata = {
   title: "Voice Calendar",
@@ -17,7 +18,10 @@ export default function RootLayout({
     <html lang="en">
       <body>
         <ClerkProvider>
-          <ConvexClientProvider>{children}</ConvexClientProvider>
+          <ConvexClientProvider>
+            <Header />
+            {children}
+          </ConvexClientProvider>
         </ClerkProvider>
       </body>
     </html>

@@ -14,7 +14,6 @@ export default defineSchema({
   actionLogs: defineTable({
     clerkUserId: v.string(),
     action: v.string(), // 'create', 'update', 'delete', 'list'
-    eventId: v.optional(v.string()),
     details: v.optional(v.any()),
     timestamp: v.number(),
   }).index("by_clerk_user_id", ["clerkUserId"]),

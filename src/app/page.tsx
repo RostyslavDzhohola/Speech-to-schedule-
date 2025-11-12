@@ -1,6 +1,6 @@
-import { SignedIn, SignedOut, SignInButton, UserButton } from '@clerk/nextjs';
-import Link from 'next/link';
-import { ConnectCalendarBadge } from '@/components/ConnectCalendarBadge';
+import { SignedIn, SignedOut, SignInButton } from "@clerk/nextjs";
+import Link from "next/link";
+import { ConnectCalendarBadge } from "@/components/ConnectCalendarBadge";
 
 export default function Home() {
   return (
@@ -9,7 +9,7 @@ export default function Home() {
         <h1 className="text-4xl font-bold text-center mb-8">
           Voice Calendar MVP
         </h1>
-        
+
         <SignedOut>
           <div className="flex flex-col items-center gap-4">
             <p className="text-center text-gray-600 mb-4">
@@ -25,10 +25,6 @@ export default function Home() {
 
         <SignedIn>
           <div className="flex flex-col items-center gap-4">
-            <div className="flex items-center gap-4">
-              <UserButton afterSignOutUrl="/" />
-              <span>Welcome! You are signed in.</span>
-            </div>
             <ConnectCalendarBadge />
             <Link
               href="/voice-test"

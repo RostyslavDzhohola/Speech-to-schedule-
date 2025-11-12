@@ -60,6 +60,25 @@ export const upsertUserTokens = mutation({
 });
 
 /**
+ * Delete Google OAuth tokens for a user (disconnect)
+ */
+export const deleteUserTokens = mutation({
+  args: { clerkUserId: v.string() },
+  handler: async (ctx, args) => {
+    const tokens = await ctx.db
+      .query("googleOAuthTokens")
+      .withIndex("by_clerk_user_id", (q) =>
+        q.eq("clerkUserId", args.clerkUserId)
+      )
+      .first();
+
+    if (tokens) {
+      await ctx.db.delete(tokens._id);
+    }
+  },
+});
+
+/**
  * Check if tokens are expired and need refresh
  */
 export const refreshIfNeeded = query({
@@ -95,14 +114,12 @@ export const logAction = mutation({
   args: {
     clerkUserId: v.string(),
     action: v.string(), // 'create', 'update', 'delete', 'list'
-    eventId: v.optional(v.string()),
     details: v.optional(v.any()),
   },
   handler: async (ctx, args) => {
     return await ctx.db.insert("actionLogs", {
       clerkUserId: args.clerkUserId,
       action: args.action,
-      eventId: args.eventId,
       details: args.details,
       timestamp: Date.now(),
     });

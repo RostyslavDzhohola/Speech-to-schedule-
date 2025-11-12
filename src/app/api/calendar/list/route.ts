@@ -6,7 +6,17 @@ import { client } from "@/lib/convex";
 import { api } from "convex/_generated/api";
 
 /**
+ * Helper function to delete invalid tokens
+ */
+async function deleteInvalidTokens(userId: string) {
+  await client.mutation(api.tokens.deleteUserTokens, {
+    clerkUserId: userId,
+  });
+}
+
+/**
  * Get Google Calendar client with refreshed tokens
+ * Handles invalid_grant errors by deleting tokens and throwing a specific error
  */
 async function getCalendarClient(userId: string) {
   // Get tokens from Convex
@@ -32,24 +42,40 @@ async function getCalendarClient(userId: string) {
       refresh_token: tokens.refreshToken,
     });
 
-    const { credentials } = await oauth2Client.refreshAccessToken();
+    try {
+      const { credentials } = await oauth2Client.refreshAccessToken();
 
-    if (!credentials.access_token || !credentials.refresh_token) {
-      throw new Error("Failed to refresh token");
+      if (!credentials.access_token) {
+        // No access token returned, delete invalid tokens
+        await deleteInvalidTokens(userId);
+        throw new Error("TOKEN_INVALID");
+      }
+
+      // Update tokens in Convex
+      await client.mutation(api.tokens.upsertUserTokens, {
+        clerkUserId: userId,
+        accessToken: credentials.access_token,
+        refreshToken: credentials.refresh_token || tokens.refreshToken,
+        expiryTimestamp: credentials.expiry_date || Date.now() + 3600 * 1000,
+      });
+
+      oauth2Client.setCredentials({
+        access_token: credentials.access_token,
+        refresh_token: credentials.refresh_token || tokens.refreshToken,
+      });
+    } catch (error: any) {
+      // Check if it's an invalid_grant error
+      if (
+        error?.message?.includes("invalid_grant") ||
+        error?.code === 400 ||
+        error?.response?.data?.error === "invalid_grant"
+      ) {
+        // Token is invalid, delete it
+        await deleteInvalidTokens(userId);
+        throw new Error("TOKEN_INVALID");
+      }
+      throw error;
     }
-
-    // Update tokens in Convex
-    await client.mutation(api.tokens.upsertUserTokens, {
-      clerkUserId: userId,
-      accessToken: credentials.access_token,
-      refreshToken: credentials.refresh_token || tokens.refreshToken,
-      expiryTimestamp: credentials.expiry_date || Date.now() + 3600 * 1000,
-    });
-
-    oauth2Client.setCredentials({
-      access_token: credentials.access_token,
-      refresh_token: credentials.refresh_token || tokens.refreshToken,
-    });
   } else {
     oauth2Client.setCredentials({
       access_token: tokens.accessToken,
@@ -111,7 +137,7 @@ export async function GET(request: Request) {
           maxResults,
         },
       })
-      .catch((err) => {
+      .catch((err: unknown) => {
         console.error("Failed to log list action:", err);
       });
 
@@ -119,9 +145,21 @@ export async function GET(request: Request) {
   } catch (error) {
     console.error("Calendar list error:", error);
 
-    // Check if it's a Google API not enabled error
     const errorMessage =
       error instanceof Error ? error.message : "Failed to list events";
+
+    // Handle invalid token error
+    if (errorMessage === "TOKEN_INVALID") {
+      return NextResponse.json(
+        {
+          error: "Google Calendar connection expired. Please reconnect.",
+          needsReconnect: true,
+        },
+        { status: 401 }
+      );
+    }
+
+    // Check if it's a Google API not enabled error
     if (
       errorMessage.includes("API has not been used") ||
       errorMessage.includes("disabled")

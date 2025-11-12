@@ -6,7 +6,17 @@ import { client } from "@/lib/convex";
 import { api } from "convex/_generated/api";
 
 /**
+ * Helper function to delete invalid tokens
+ */
+async function deleteInvalidTokens(userId: string) {
+  await client.mutation(api.tokens.deleteUserTokens, {
+    clerkUserId: userId,
+  });
+}
+
+/**
  * Get Google Calendar client with refreshed tokens
+ * Handles invalid_grant errors by deleting tokens and throwing a specific error
  */
 async function getCalendarClient(userId: string) {
   const tokens = await client.query(api.tokens.getUserTokens, {
@@ -14,7 +24,7 @@ async function getCalendarClient(userId: string) {
   });
 
   if (!tokens) {
-    throw new Error('Google Calendar not connected');
+    throw new Error("Google Calendar not connected");
   }
 
   const oauth2Client = new google.auth.OAuth2(
@@ -29,23 +39,39 @@ async function getCalendarClient(userId: string) {
       refresh_token: tokens.refreshToken,
     });
 
-    const { credentials } = await oauth2Client.refreshAccessToken();
-    
-    if (!credentials.access_token || !credentials.refresh_token) {
-      throw new Error('Failed to refresh token');
+    try {
+      const { credentials } = await oauth2Client.refreshAccessToken();
+
+      if (!credentials.access_token) {
+        // No access token returned, delete invalid tokens
+        await deleteInvalidTokens(userId);
+        throw new Error("TOKEN_INVALID");
+      }
+
+      await client.mutation(api.tokens.upsertUserTokens, {
+        clerkUserId: userId,
+        accessToken: credentials.access_token,
+        refreshToken: credentials.refresh_token || tokens.refreshToken,
+        expiryTimestamp: credentials.expiry_date || Date.now() + 3600 * 1000,
+      });
+
+      oauth2Client.setCredentials({
+        access_token: credentials.access_token,
+        refresh_token: credentials.refresh_token || tokens.refreshToken,
+      });
+    } catch (error: any) {
+      // Check if it's an invalid_grant error
+      if (
+        error?.message?.includes("invalid_grant") ||
+        error?.code === 400 ||
+        error?.response?.data?.error === "invalid_grant"
+      ) {
+        // Token is invalid, delete it
+        await deleteInvalidTokens(userId);
+        throw new Error("TOKEN_INVALID");
+      }
+      throw error;
     }
-
-    await client.mutation(api.tokens.upsertUserTokens, {
-      clerkUserId: userId,
-      accessToken: credentials.access_token,
-      refreshToken: credentials.refresh_token || tokens.refreshToken,
-      expiryTimestamp: credentials.expiry_date || Date.now() + 3600 * 1000,
-    });
-
-    oauth2Client.setCredentials({
-      access_token: credentials.access_token,
-      refresh_token: credentials.refresh_token || tokens.refreshToken,
-    });
   } else {
     oauth2Client.setCredentials({
       access_token: tokens.accessToken,
@@ -53,7 +79,7 @@ async function getCalendarClient(userId: string) {
     });
   }
 
-  return google.calendar({ version: 'v3', auth: oauth2Client });
+  return google.calendar({ version: "v3", auth: oauth2Client });
 }
 
 const createEventSchema = z.object({
@@ -62,10 +88,12 @@ const createEventSchema = z.object({
   end: z.string(), // ISO 8601
   location: z.string().optional(),
   attendees: z.array(z.string().email()).optional(),
-  recurrence: z.object({
-    freq: z.enum(['DAILY', 'WEEKLY', 'MONTHLY']),
-    count: z.number().optional(),
-  }).optional(),
+  recurrence: z
+    .object({
+      freq: z.enum(["DAILY", "WEEKLY", "MONTHLY"]),
+      count: z.number().optional(),
+    })
+    .optional(),
 });
 
 /**
@@ -73,9 +101,9 @@ const createEventSchema = z.object({
  */
 export async function POST(request: Request) {
   const { userId } = await auth();
-  
+
   if (!userId) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
   try {
@@ -88,11 +116,11 @@ export async function POST(request: Request) {
       summary: validated.title,
       start: {
         dateTime: validated.start,
-        timeZone: 'UTC',
+        timeZone: "UTC",
       },
       end: {
         dateTime: validated.end,
-        timeZone: 'UTC',
+        timeZone: "UTC",
       },
     };
 
@@ -101,12 +129,12 @@ export async function POST(request: Request) {
     }
 
     if (validated.attendees && validated.attendees.length > 0) {
-      event.attendees = validated.attendees.map(email => ({ email }));
+      event.attendees = validated.attendees.map((email) => ({ email }));
     }
 
     if (validated.recurrence) {
       const { freq, count } = validated.recurrence;
-      const freqMap = { DAILY: 'DAILY', WEEKLY: 'WEEKLY', MONTHLY: 'MONTHLY' };
+      const freqMap = { DAILY: "DAILY", WEEKLY: "WEEKLY", MONTHLY: "MONTHLY" };
       let rule = `RRULE:FREQ=${freqMap[freq]}`;
       if (count) {
         rule += `;COUNT=${count}`;
@@ -123,7 +151,6 @@ export async function POST(request: Request) {
     await client.mutation(api.tokens.logAction, {
       clerkUserId: userId,
       action: "create",
-      eventId: response.data.id,
       details: {
         title: validated.title,
         start: validated.start,
@@ -146,11 +173,27 @@ export async function POST(request: Request) {
         { status: 400 }
       );
     }
+
+    const errorMessage =
+      error instanceof Error ? error.message : "Failed to create event";
+
+    // Handle invalid token error
+    if (errorMessage === "TOKEN_INVALID") {
+      return NextResponse.json(
+        {
+          error: "Google Calendar connection expired. Please reconnect.",
+          needsReconnect: true,
+        },
+        { status: 401 }
+      );
+    }
+
     console.error("Calendar create error:", error);
     return NextResponse.json(
-      { error: error instanceof Error ? error.message : "Failed to create event" },
+      {
+        error: errorMessage,
+      },
       { status: 500 }
     );
   }
 }
-
