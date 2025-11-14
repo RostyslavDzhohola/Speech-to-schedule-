@@ -1,5 +1,9 @@
 import { tool } from "@openai/agents/realtime";
 import { z } from "zod";
+import {
+  VOICE_SESSION_END_EVENT,
+  VOICE_SESSION_ID_KEY,
+} from "./voice-session-bridge";
 
 /**
  * Tool definitions for the calendar agent
@@ -134,3 +138,43 @@ export const deleteEventTool = tool({
   },
 });
 
+export const endVoiceSessionTool = tool({
+  name: "end_voice_session",
+  description:
+    "End the current voice session. Use this when the user confirms they want to end the session after you ask for confirmation.",
+  parameters: z.object({}),
+  execute: async () => {
+    // Get session ID from sessionStorage
+    if (typeof window === "undefined") {
+      return { error: "Not available in server context" };
+    }
+
+    const sessionId = sessionStorage.getItem(VOICE_SESSION_ID_KEY);
+    if (!sessionId) {
+      return { error: "No active voice session found" };
+    }
+
+    // Call API to mark session as ended
+    const response = await fetch("/api/voice/session/stop", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sessionId }),
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      return { error: data.error || "Failed to end voice session" };
+    }
+
+    // Delay event dispatch to allow the tool result to be sent back to the agent
+    // before disconnecting the WebRTC connection. This prevents "WebRTC data channel
+    // is not connected" errors that occur when the connection is closed while the
+    // SDK is still trying to send the function call output.
+    setTimeout(() => {
+      window.dispatchEvent(new CustomEvent(VOICE_SESSION_END_EVENT));
+    }, 400);
+
+    return { success: true, message: "Voice session ended" };
+  },
+});

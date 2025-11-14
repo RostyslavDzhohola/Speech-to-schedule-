@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import { RealtimeAgent, RealtimeSession } from "@openai/agents/realtime";
 import {
   getEphemeralToken,
@@ -19,7 +19,12 @@ import {
   createEventTool,
   updateEventTool,
   deleteEventTool,
+  endVoiceSessionTool,
 } from "@/lib/calendar-agent-tools";
+import {
+  VOICE_SESSION_END_EVENT,
+  VOICE_SESSION_ID_KEY,
+} from "@/lib/voice-session-bridge";
 
 interface VoiceConsoleProps {
   isGoogleCalendarConnected: boolean;
@@ -44,6 +49,7 @@ export function VoiceConsole({
   const sessionIdRef = useRef<string | null>(null);
   const toolCallsCountRef = useRef<number>(0);
   const chimePlayedRef = useRef<boolean>(false);
+  const isDisconnectingRef = useRef<boolean>(false);
 
   /**
    * Plays a pleasant chime sound to indicate the agent is ready
@@ -124,6 +130,11 @@ export function VoiceConsole({
         sessionIdRef.current = sessionId;
         toolCallsCountRef.current = 0;
         chimePlayedRef.current = false; // Reset chime flag for new session
+        isDisconnectingRef.current = false; // Reset disconnecting flag for new session
+        // Store session ID in sessionStorage for agent tools to access
+        if (typeof window !== "undefined") {
+          sessionStorage.setItem(VOICE_SESSION_ID_KEY, sessionId);
+        }
       } catch (err) {
         const errorMessage = normalizeErrorMessage(err);
         const errorType = classifyErrorType(errorMessage);
@@ -180,12 +191,15 @@ export function VoiceConsole({
         IMPORTANT: Current user time: ${currentTime} (Time Zone: ${userTimezone})
         When creating or updating events, always use the user's local timezone (${userTimezone}) unless they explicitly specify a different timezone.
         
+        SESSION MANAGEMENT: If the user indicates they are done (e.g., "I'm done", "that's it for now", "okay, I'm done"), you MUST ask for confirmation: "Do you want me to end the session?" Only call the end_voice_session tool if they confirm with "yes" or similar affirmative response.
+        
         RESPONSE STYLE: After completing any task, respond with a very brief confirmation only. Use short phrases like "Done, what's next?" or "Do you need anything else?" and nothing more. Keep responses concise and to the point.`,
           tools: [
             findEventsTool,
             createEventTool,
             updateEventTool,
             deleteEventTool,
+            endVoiceSessionTool,
           ],
         });
 
@@ -230,9 +244,23 @@ export function VoiceConsole({
         connectionErrorOccurred = true;
         let errorMessage = normalizeErrorMessage(err);
         const errorType = classifyErrorType(errorMessage);
+        const lowerMessage = errorMessage.toLowerCase();
+
+        // Suppress WebRTC data channel errors when intentionally disconnecting
+        // This happens when the session is stopped and the agent tries to send a response
+        // through the now-closed connection - this is expected behavior
+        if (
+          isDisconnectingRef.current &&
+          (lowerMessage.includes("data channel is not connected") ||
+            lowerMessage.includes("webrtc data channel") ||
+            (lowerMessage.includes("webrtc") &&
+              lowerMessage.includes("not connected")))
+        ) {
+          // Silently ignore this error - it's expected when disconnecting
+          return;
+        }
 
         // Provide more context for common errors
-        const lowerMessage = errorMessage.toLowerCase();
         if (lowerMessage.includes("permission")) {
           // Determine if it's API key or microphone permission
           if (
@@ -379,8 +407,11 @@ export function VoiceConsole({
     }
   };
 
-  const disconnect = async () => {
+  const disconnect = useCallback(async () => {
     if (sessionRef.current) {
+      // Mark that we're intentionally disconnecting to suppress expected WebRTC errors
+      isDisconnectingRef.current = true;
+
       // Try to disconnect the session using the proper API
       try {
         // Try direct disconnect method first
@@ -412,14 +443,36 @@ export function VoiceConsole({
         sessionIdRef.current = null;
       }
 
+      // Clear session ID from sessionStorage
+      if (typeof window !== "undefined") {
+        sessionStorage.removeItem(VOICE_SESSION_ID_KEY);
+      }
+
       setStatus("idle");
       setHistory([]);
       setError(null);
       setErrorType(null);
       toolCallsCountRef.current = 0;
       chimePlayedRef.current = false; // Reset chime flag on disconnect
+
+      // Reset disconnecting flag after a short delay to allow any pending errors to be suppressed
+      setTimeout(() => {
+        isDisconnectingRef.current = false;
+      }, 1000);
     }
-  };
+  }, []);
+
+  // Listen for agent-triggered session end events
+  useEffect(() => {
+    const handleSessionEnd = () => {
+      disconnect();
+    };
+
+    window.addEventListener(VOICE_SESSION_END_EVENT, handleSessionEnd);
+    return () => {
+      window.removeEventListener(VOICE_SESSION_END_EVENT, handleSessionEnd);
+    };
+  }, [disconnect]);
 
   useEffect(() => {
     return () => {

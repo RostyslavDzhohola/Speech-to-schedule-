@@ -6,7 +6,6 @@ import { useState } from "react";
 import { useQuery } from "convex/react";
 import { api } from "convex/_generated/api";
 import { useAuth } from "@clerk/nextjs";
-import { ConnectCalendarBadge } from "@/components/ConnectCalendarBadge";
 
 // Defer heavy realtime SDK until needed
 const VoiceConsole = dynamic(
@@ -63,9 +62,7 @@ export default function Home() {
             </SignedOut>
 
             <SignedIn>
-              <div className="w-full max-w-2xl">
-                <ConnectCalendarBadge />
-              </div>
+              {/* Calendar connection badge is shown in the VoiceConsole component */}
             </SignedIn>
           </div>
         </div>
@@ -95,7 +92,9 @@ export default function Home() {
               <ul className="space-y-2 text-sm text-slate-700">
                 <li>• “Create event ‘Team Sync’ tomorrow 10 to 10:30”</li>
                 <li>• “Find meetings with Sarah next week”</li>
-                <li>• “Rename ‘1:1 John’ to ‘Mentorship’ and add a Zoom link”</li>
+                <li>
+                  • “Rename ‘1:1 John’ to ‘Mentorship’ and add a Zoom link”
+                </li>
                 <li>• “Delete my dentist appointment on the 21st”</li>
               </ul>
               <div className="mt-4 text-xs text-slate-500">
