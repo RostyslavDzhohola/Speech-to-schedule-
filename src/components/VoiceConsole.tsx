@@ -43,6 +43,47 @@ export function VoiceConsole({
   const sessionRef = useRef<RealtimeSession | null>(null);
   const sessionIdRef = useRef<string | null>(null);
   const toolCallsCountRef = useRef<number>(0);
+  const chimePlayedRef = useRef<boolean>(false);
+
+  /**
+   * Plays a pleasant chime sound to indicate the agent is ready
+   * Uses Web Audio API to generate a simple two-tone chime programmatically
+   */
+  const playReadyChime = () => {
+    try {
+      const audioContext = new (window.AudioContext ||
+        (window as any).webkitAudioContext)();
+      const now = audioContext.currentTime;
+
+      // Create a pleasant two-tone chime (C5 and E5 notes)
+      const frequencies = [523.25, 659.25]; // C5 and E5 in Hz
+      frequencies.forEach((freq, index) => {
+        const oscillator = audioContext.createOscillator();
+        const gainNode = audioContext.createGain();
+
+        oscillator.connect(gainNode);
+        gainNode.connect(audioContext.destination);
+
+        oscillator.frequency.value = freq;
+        oscillator.type = "sine"; // Sine wave for a smooth, pleasant tone
+
+        // Envelope: quick attack, gentle decay
+        gainNode.gain.setValueAtTime(0, now + index * 0.1);
+        gainNode.gain.linearRampToValueAtTime(0.3, now + index * 0.1 + 0.01);
+        gainNode.gain.exponentialRampToValueAtTime(
+          0.01,
+          now + index * 0.1 + 0.3
+        );
+
+        oscillator.start(now + index * 0.1);
+        oscillator.stop(now + index * 0.1 + 0.3);
+      });
+    } catch (err) {
+      // Silently fail if audio context cannot be created
+      // (e.g., browser doesn't support Web Audio API or autoplay restrictions)
+      console.warn("Could not play ready chime:", err);
+    }
+  };
 
   const connect = async () => {
     try {
@@ -82,6 +123,7 @@ export function VoiceConsole({
         sessionId = await createVoiceSession();
         sessionIdRef.current = sessionId;
         toolCallsCountRef.current = 0;
+        chimePlayedRef.current = false; // Reset chime flag for new session
       } catch (err) {
         const errorMessage = normalizeErrorMessage(err);
         const errorType = classifyErrorType(errorMessage);
@@ -93,14 +135,52 @@ export function VoiceConsole({
         return;
       }
 
-      // Step 3: Create agent with tools
+      // Step 3: Capture user's timezone and current time
+      let userTimezone: string;
+      let currentTime: string;
+      try {
+        // Get user's IANA timezone (e.g., "America/New_York", "Europe/London")
+        const resolvedOptions = Intl.DateTimeFormat().resolvedOptions();
+        userTimezone = resolvedOptions.timeZone || "UTC";
+
+        // Get current local time in a readable format
+        const now = new Date();
+        currentTime = now.toLocaleString("en-US", {
+          timeZone: userTimezone,
+          weekday: "long",
+          year: "numeric",
+          month: "long",
+          day: "numeric",
+          hour: "numeric",
+          minute: "2-digit",
+          hour12: true,
+        });
+      } catch (err) {
+        // Fallback to UTC if timezone detection fails
+        console.warn("Failed to detect timezone, using UTC:", err);
+        userTimezone = "UTC";
+        currentTime = new Date().toISOString();
+      }
+
+      // Log timezone context for verification
+      console.log("Timezone context:", {
+        timezone: userTimezone,
+        currentTime,
+      });
+
+      // Step 4: Create agent with tools and timezone context
       try {
         const agent = new RealtimeAgent({
           name: "Calendar Assistant",
           instructions: `You are a helpful assistant for managing Google Calendar. 
         You can help users create, update, and delete calendar events.
         When users ask about events, use find_events to search for them.
-        Always confirm before deleting events.`,
+        Always confirm before deleting events.
+        
+        IMPORTANT: Current user time: ${currentTime} (Time Zone: ${userTimezone})
+        When creating or updating events, always use the user's local timezone (${userTimezone}) unless they explicitly specify a different timezone.
+        
+        RESPONSE STYLE: After completing any task, respond with a very brief confirmation only. Use short phrases like "Done, what's next?" or "Do you need anything else?" and nothing more. Keep responses concise and to the point.`,
           tools: [
             findEventsTool,
             createEventTool,
@@ -109,7 +189,7 @@ export function VoiceConsole({
           ],
         });
 
-        // Step 4: Create session
+        // Step 5: Create session
         // 2 models available: gpt-realtime-2025-08-28 and gpt-realtime-mini-2025-10-06
         // gpt-realtime-mini-2025-10-06 cheaper but faster
         // gpt-realtime-2025-08-28 more better performance but slower
@@ -127,7 +207,7 @@ export function VoiceConsole({
         return;
       }
 
-      // Step 5: Set up event listeners before connecting
+      // Step 6: Set up event listeners before connecting
       let connectionErrorOccurred = false;
 
       // Listen for connection events - these are the primary way to detect connection state
@@ -138,6 +218,12 @@ export function VoiceConsole({
         });
         setError(null); // Clear any previous errors on successful connection
         setErrorType(null);
+
+        // Play chime once when connection is established
+        if (!chimePlayedRef.current) {
+          chimePlayedRef.current = true;
+          playReadyChime();
+        }
       });
 
       (session.on as any)("error", (err: any) => {
@@ -198,7 +284,7 @@ export function VoiceConsole({
         }
       });
 
-      // Step 6: Connect to WebRTC
+      // Step 7: Connect to WebRTC
       try {
         await session.connect({
           apiKey: ephemeralToken,
@@ -209,7 +295,14 @@ export function VoiceConsole({
           // Fallback: if connect() resolved and we're still connecting, assume connected
           // But only update if status hasn't been changed by event listeners (e.g., to error)
           setStatus((currentStatus) => {
-            return currentStatus === "connecting" ? "connected" : currentStatus;
+            const newStatus =
+              currentStatus === "connecting" ? "connected" : currentStatus;
+            // Play chime if we transitioned to connected and haven't played it yet
+            if (newStatus === "connected" && !chimePlayedRef.current) {
+              chimePlayedRef.current = true;
+              playReadyChime();
+            }
+            return newStatus;
           });
         }
         sessionRef.current = session;
@@ -324,6 +417,7 @@ export function VoiceConsole({
       setError(null);
       setErrorType(null);
       toolCallsCountRef.current = 0;
+      chimePlayedRef.current = false; // Reset chime flag on disconnect
     }
   };
 
@@ -409,9 +503,7 @@ export function VoiceConsole({
                   <div className="mt-2 text-xs">
                     <p className="font-medium">How to fix:</p>
                     <ul className="list-disc list-inside mt-1 space-y-1">
-                      <li>
-                        Click the lock icon in your browser's address bar
-                      </li>
+                      <li>Click the lock icon in your browser's address bar</li>
                       <li>Allow microphone access for this site</li>
                       <li>Refresh the page and try again</li>
                     </ul>
@@ -424,12 +516,8 @@ export function VoiceConsole({
                       <li>
                         Contact your administrator to verify the OpenAI API key
                       </li>
-                      <li>
-                        Ensure the API key has access to the Realtime API
-                      </li>
-                      <li>
-                        Check if the API key has expired or been revoked
-                      </li>
+                      <li>Ensure the API key has access to the Realtime API</li>
+                      <li>Check if the API key has expired or been revoked</li>
                     </ul>
                   </div>
                 )}
@@ -510,4 +598,3 @@ export function VoiceConsole({
     </div>
   );
 }
-

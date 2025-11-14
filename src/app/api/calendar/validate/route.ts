@@ -63,10 +63,11 @@ export async function GET() {
         }
 
         // Update tokens in Convex with refreshed credentials
+        // access_token is guaranteed to exist after the check above
         await client.mutation(api.tokens.upsertUserTokens, {
           clerkUserId: userId,
-          accessToken: credentials.access_token,
-          refreshToken: credentials.refresh_token || tokens.refreshToken,
+          accessToken: credentials.access_token!,
+          refreshToken: credentials.refresh_token ?? tokens.refreshToken,
           expiryTimestamp: credentials.expiry_date || Date.now() + 3600 * 1000,
         });
 

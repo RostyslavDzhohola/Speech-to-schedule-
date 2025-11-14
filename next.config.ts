@@ -8,6 +8,8 @@ const nextConfig: NextConfig = {
     turbopackFileSystemCacheForDev: true,
     // Note: turbopackFileSystemCacheForBuild requires Next.js canary version
     // Removed for compatibility with Next.js 16.0.1 stable
+    // Forward browser console logs and runtime errors to the development server terminal
+    browserDebugInfoInTerminal: true,
   },
 };
 
