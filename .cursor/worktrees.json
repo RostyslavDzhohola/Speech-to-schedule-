@@ -1,3 +1,7 @@
 {
+  "setup-worktree-unix": [
+    "if [ ! -f .env.local ]; then MAIN_WORKTREE=$(git worktree list | head -1 | awk '{print $1}'); if [ -f \"$MAIN_WORKTREE/.env.local\" ]; then cp \"$MAIN_WORKTREE/.env.local\" .env.local && echo \"✓ Copied .env.local from main worktree\"; else echo \"⚠ Warning: .env.local not found in main worktree at $MAIN_WORKTREE\"; fi; else echo \"✓ .env.local already exists\"; fi",
+    "pnpm install"
+  ],
   "setup-worktree": ["pnpm install"]
 }
