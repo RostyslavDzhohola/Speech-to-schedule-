@@ -208,7 +208,7 @@ export function VoiceConsole({
         // gpt-realtime-mini-2025-10-06 cheaper but faster
         // gpt-realtime-2025-08-28 more better performance but slower
         session = new RealtimeSession(agent, {
-          model: "gpt-realtime-mini-2025-10-06",
+          model: "gpt-realtime-2025-08-28",
         });
       } catch (err) {
         const errorMessage = normalizeErrorMessage(err);

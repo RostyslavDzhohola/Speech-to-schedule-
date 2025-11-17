@@ -10,10 +10,66 @@ import {
  * These tools allow the voice agent to interact with Google Calendar
  */
 
+/**
+ * Helper function to get the start of a day (00:00:00) for a given ISO date string
+ */
+function getDayStart(isoString: string): string {
+  const date = new Date(isoString);
+  date.setHours(0, 0, 0, 0);
+  return date.toISOString();
+}
+
+/**
+ * Helper function to get the end of a day (23:59:59) for a given ISO date string
+ */
+function getDayEnd(isoString: string): string {
+  const date = new Date(isoString);
+  date.setHours(23, 59, 59, 999);
+  return date.toISOString();
+}
+
+/**
+ * Helper function to get the start of a week (Sunday 00:00:00) for a given ISO date string
+ */
+function getWeekStart(isoString: string): string {
+  const date = new Date(isoString);
+  const day = date.getDay();
+  date.setDate(date.getDate() - day);
+  date.setHours(0, 0, 0, 0);
+  return date.toISOString();
+}
+
+/**
+ * Helper function to get the end of a week (Saturday 23:59:59) for a given ISO date string
+ */
+function getWeekEnd(isoString: string): string {
+  const date = new Date(isoString);
+  const day = date.getDay();
+  date.setDate(date.getDate() + (6 - day));
+  date.setHours(23, 59, 59, 999);
+  return date.toISOString();
+}
+
+/**
+ * Helper function to check if two ISO date strings are on the same day
+ */
+function isSameDay(iso1: string, iso2: string): boolean {
+  const d1 = new Date(iso1);
+  const d2 = new Date(iso2);
+  return (
+    d1.getFullYear() === d2.getFullYear() &&
+    d1.getMonth() === d2.getMonth() &&
+    d1.getDate() === d2.getDate()
+  );
+}
+
 export const findEventsTool = tool({
   name: "find_events",
   description:
-    "Find calendar events by query, date range, or list upcoming events",
+    "Find calendar events by query, date range, or list upcoming events. " +
+    "If a query doesn't match any events in the specified range, the tool will automatically " +
+    "expand the search to the full day, then the full week, returning all events so the agent " +
+    "can use context to identify which event the user is referring to.",
   parameters: z.object({
     query: z.string().optional(),
     start: z.string().optional(),
@@ -21,6 +77,7 @@ export const findEventsTool = tool({
     max: z.number().optional(),
   }),
   execute: async ({ query, start, end, max }) => {
+    // Initial search with provided parameters
     const params = new URLSearchParams();
     if (start) params.set("start", start);
     if (end) params.set("end", end);
@@ -35,16 +92,99 @@ export const findEventsTool = tool({
 
     // Filter by query if provided
     let events = data.events || [];
+    let searchRange: "original" | "day" | "week" = "original";
+
     if (query) {
       const lowerQuery = query.toLowerCase();
-      events = events.filter(
+      const filteredEvents = events.filter(
         (e: any) =>
           e.title.toLowerCase().includes(lowerQuery) ||
           e.description?.toLowerCase().includes(lowerQuery)
       );
+
+      // If no matches found and we have date boundaries, try fallback searches
+      if (filteredEvents.length === 0 && start && end) {
+        // Check if start and end are on the same day
+        if (isSameDay(start, end)) {
+          // Fallback 1: Search the entire day
+          const dayStart = getDayStart(start);
+          const dayEnd = getDayEnd(start);
+
+          const dayParams = new URLSearchParams();
+          dayParams.set("start", dayStart);
+          dayParams.set("end", dayEnd);
+          if (max) dayParams.set("max", max.toString());
+
+          const dayResponse = await fetch(
+            `/api/calendar/list?${dayParams.toString()}`
+          );
+          const dayData = await dayResponse.json();
+
+          if (dayResponse.ok && dayData.events && dayData.events.length > 0) {
+            events = dayData.events;
+            searchRange = "day";
+          } else {
+            // Fallback 2: Search the entire week
+            const weekStart = getWeekStart(start);
+            const weekEnd = getWeekEnd(start);
+
+            const weekParams = new URLSearchParams();
+            weekParams.set("start", weekStart);
+            weekParams.set("end", weekEnd);
+            if (max) weekParams.set("max", max.toString());
+
+            const weekResponse = await fetch(
+              `/api/calendar/list?${weekParams.toString()}`
+            );
+            const weekData = await weekResponse.json();
+
+            if (
+              weekResponse.ok &&
+              weekData.events &&
+              weekData.events.length > 0
+            ) {
+              events = weekData.events;
+              searchRange = "week";
+            }
+          }
+        } else {
+          // If the range spans multiple days, try expanding to full week
+          const weekStart = getWeekStart(start);
+          const weekEnd = getWeekEnd(end);
+
+          const weekParams = new URLSearchParams();
+          weekParams.set("start", weekStart);
+          weekParams.set("end", weekEnd);
+          if (max) weekParams.set("max", max.toString());
+
+          const weekResponse = await fetch(
+            `/api/calendar/list?${weekParams.toString()}`
+          );
+          const weekData = await weekResponse.json();
+
+          if (
+            weekResponse.ok &&
+            weekData.events &&
+            weekData.events.length > 0
+          ) {
+            events = weekData.events;
+            searchRange = "week";
+          }
+        }
+      } else {
+        // We found matches with the original query
+        events = filteredEvents;
+      }
     }
 
-    return { events };
+    return {
+      events,
+      searchRange,
+      message:
+        searchRange !== "original"
+          ? `No exact matches found. Expanded search to ${searchRange} range. Use your understanding of the user's query to identify the relevant event from the results.`
+          : undefined,
+    };
   },
 });
 
